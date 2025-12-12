@@ -3,7 +3,7 @@ import { Hex, areHexesEqual, getHexRange } from '../../Grid/HexMath';
 import { GameMap, ImprovementType } from '../../Grid/GameMap';
 import { Unit } from '../../Entities/Unit';
 import { AssetManager } from '../AssetManager';
-import { Camera, hexToScreen, ISO_FACTOR } from '../RenderUtils';
+import { Camera, hexToScreen, ISO_FACTOR, getHexPath2D } from '../RenderUtils';
 
 export class OverlayDrawer {
 
@@ -57,6 +57,8 @@ export class OverlayDrawer {
         const { x, y } = hexToScreen(hex.q, hex.r, camera, hexSize);
         const currentHexSize = hexSize * camera.zoom;
         
+        // Use cached path for outline if needed, or sprite
+        // Using sprite from AssetManager is usually faster for simple glows
         const uiDrawW = Math.ceil(Math.sqrt(3) * currentHexSize);
         const uiDrawH = Math.ceil((2 * currentHexSize * ISO_FACTOR) + 4);
         
@@ -115,14 +117,17 @@ export class OverlayDrawer {
 
         const { x, y } = hexToScreen(selectedHex.q, selectedHex.r, camera, hexSize);
         const currentHexSize = hexSize * camera.zoom;
-        const uiDrawW = Math.ceil(Math.sqrt(3) * currentHexSize);
-        const uiDrawH = Math.ceil((2 * currentHexSize * ISO_FACTOR) + 4);
-
-        ctx.drawImage(
-            assets.uiSprites,
-            assets.uiMap.cursor.x * assets.uiTileW, 0, assets.uiTileW, assets.uiTileH,
-            x - uiDrawW/2, y - uiDrawH/2, uiDrawW, uiDrawH
-        );
+        
+        const path = getHexPath2D(currentHexSize - (2 * camera.zoom), ISO_FACTOR);
+        
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 3;
+        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        ctx.shadowBlur = 4;
+        ctx.stroke(path);
+        ctx.restore();
     }
 
     private static isCollectionCenter(map: GameMap, hex: Hex): boolean {

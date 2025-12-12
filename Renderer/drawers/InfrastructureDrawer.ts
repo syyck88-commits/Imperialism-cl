@@ -17,10 +17,8 @@ export function isConnectable(t: TileData): boolean {
         t.improvement === ImprovementType.OIL_WELL;
 }
 
-export function drawTileConnections(map: GameMap, hex: Hex, camera: Camera, hexSize: number) {
+export function drawTileConnections(map: GameMap, hex: Hex, screenX: number, screenY: number, camera: Camera, hexSize: number) {
     return (ctx: CanvasRenderingContext2D) => {
-        const { x, y } = hexToScreen(hex.q, hex.r, camera, hexSize);
-        
         ctx.lineWidth = Math.max(2, 6 * camera.zoom); 
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
@@ -34,10 +32,13 @@ export function drawTileConnections(map: GameMap, hex: Hex, camera: Camera, hexS
             
             const nTile = map.getTile(n.q, n.r);
             if (nTile && isConnectable(nTile)) {
+                // We still need neighbor screen pos. Since neighbors are 1 unit away, 
+                // we could optimize this with relative offsets, but this is fast enough for now compared to map-wide iteration.
+                // Re-calculating neighbor pos is safer than passing complex neighbor structs.
                 const nPos = hexToScreen(n.q, n.r, camera, hexSize);
-                const midX = (x + nPos.x) / 2;
-                const midY = (y + nPos.y) / 2;
-                ctx.moveTo(x, y);
+                const midX = (screenX + nPos.x) / 2;
+                const midY = (screenY + nPos.y) / 2;
+                ctx.moveTo(screenX, screenY);
                 ctx.lineTo(midX, midY);
             }
         }

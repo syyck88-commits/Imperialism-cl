@@ -2,7 +2,7 @@
 import { TerrainType, TileData, ImprovementType } from '../../Grid/GameMap';
 import { Hex, hexToString } from '../../Grid/HexMath';
 import { AssetManager } from '../AssetManager';
-import { Camera, hexToScreen, ISO_FACTOR } from '../RenderUtils';
+import { Camera, ISO_FACTOR } from '../RenderUtils';
 import { noise } from '../../utils/SimplexNoise';
 
 function pseudoRandom(seed: number): number {
@@ -18,46 +18,30 @@ export function drawTexturedHex(
     type: TerrainType,
     assets: AssetManager
 ) {
-    // 128 is the fixed resolution of our cached base tiles
-    const CACHE_SIZE = 128;
     const gridWidth = Math.sqrt(3) * size;
-    // Calculate draw width based on aspect ratio
-    // The cache is generated with tileW = 128 (approx)
-    // We scale the cached image to match current grid size
-    const drawW = gridWidth; 
+    const scale = gridWidth / 128; 
+    const drawW = 128 * scale;
     
     // Base layer: always draw land or water to prevent gaps
     let baseType: 'water' | 'land' | 'desert' = 'land';
     if (type === TerrainType.WATER) baseType = 'water';
     if (type === TerrainType.DESERT) baseType = 'desert';
     
-    const cachedTile = assets.getCachedBaseTile(baseType);
+    const baseSprite = assets.getBaseSprite(baseType);
     
-    if (cachedTile) {
-        const aspect = cachedTile.width / cachedTile.height;
-        const drawH = drawW / aspect;
-        
-        // Offset Y to center visually based on the block height
-        // The cache includes the 3D depth, so we align the top surface
-        ctx.drawImage(cachedTile, x - drawW/2, y - drawH * 0.4, drawW, drawH);
-    } else {
-        // Fallback to old sprite method if cache fails
-        const baseSprite = assets.getBaseSprite(baseType);
-        if (baseSprite) {
-            const scale = gridWidth / 128; 
-            const dW = 128 * scale;
-            const aspect = baseSprite.width / baseSprite.height;
-            const spriteH = dW / aspect;
-            ctx.drawImage(baseSprite, x - dW/2, y - spriteH * 0.4, dW, spriteH);
-        }
+    if (baseSprite) {
+        const aspect = baseSprite.width / baseSprite.height;
+        const spriteH = drawW / aspect;
+        ctx.drawImage(baseSprite, x - drawW/2, y - spriteH * 0.4, drawW, spriteH);
     }
 
     const isProcedural = type === TerrainType.FOREST || type === TerrainType.DESERT || type === TerrainType.MOUNTAIN || type === TerrainType.HILLS;
-    
+    const drawH = drawW;
+
     if (!isProcedural && type !== TerrainType.PLAINS && type !== TerrainType.WATER) {
         const overlaySprite = assets.getSprite(type);
         if (overlaySprite) {
-            ctx.drawImage(overlaySprite, x - drawW/2, y - drawW/2, drawW, drawW);
+            ctx.drawImage(overlaySprite, x - drawW/2, y - drawH/2, drawW, drawH);
         }
     }
 }
@@ -76,6 +60,8 @@ export function drawDesertTile(
 export function drawForestTile(
     hex: Hex, 
     tile: TileData,
+    screenX: number, // Screen coords passed in
+    screenY: number, 
     camera: Camera, 
     hexSize: number, 
     assets: AssetManager, 
@@ -84,7 +70,6 @@ export function drawForestTile(
     windStrength: number = 0.5
 ) {
     return (ctx: CanvasRenderingContext2D) => {
-        const { x: centerX, y: centerY } = hexToScreen(hex.q, hex.r, camera, hexSize);
         const size = hexSize * camera.zoom;
         
         const hasRoad = tile.improvement === ImprovementType.ROAD || tile.improvement === ImprovementType.RAILROAD;
@@ -187,8 +172,8 @@ export function drawForestTile(
                 const aspect = sprite.width / sprite.height;
                 const drawH = baseH * baseScale;
                 const drawW = drawH * aspect;
-                const treeX = centerX + offsetX;
-                const treeY = centerY + offsetY;
+                const treeX = screenX + offsetX;
+                const treeY = screenY + offsetY;
 
                 // Deterministic Phase for local sway
                 const phase = rng(i * 10) * Math.PI * 2;

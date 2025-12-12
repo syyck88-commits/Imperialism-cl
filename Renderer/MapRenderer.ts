@@ -4,7 +4,7 @@ import { Hex, areHexesEqual, hexToString } from '../Grid/HexMath';
 import { City } from '../Entities/City';
 import { Unit } from '../Entities/Unit';
 import { AssetManager } from './AssetManager';
-import { Camera, hexToScreen, ISO_FACTOR, RenderLayer } from './RenderUtils';
+import { Camera, hexToScreen, ISO_FACTOR } from './RenderUtils';
 import { TerrainClustering } from './TerrainClustering';
 import { TileDrawer } from './drawers/TileDrawer';
 import { CityDrawer } from './drawers/CityDrawer';
@@ -12,9 +12,6 @@ import { UnitDrawer } from './drawers/UnitDrawer';
 import { OverlayDrawer } from './drawers/OverlayDrawer';
 import { TerrainErosion, TerrainSprite } from './assets/TerrainErosion';
 import { AnimalManager } from './effects/AnimalManager';
-
-// Reusable type for render function to avoid closure creation overhead
-type RenderFn = () => void;
 
 export class MapRenderer {
     public map: GameMap;
@@ -27,17 +24,20 @@ export class MapRenderer {
     // Terrain Sprites (Deserts + Mountains + Hills)
     private terrainSprites: TerrainSprite[] = [];
     
+    // Pre-calculated metrics
     private hexWidth: number;
     private vertDist: number;
     private horizDist: number;
 
-    // Optimization: Pools and caches
+    // --- Optimization: Object Pools & Buckets ---
+    // Avoid creating new Maps/Arrays every frame
     private _unitsByRow: Map<number, Unit[]> = new Map();
     private _citiesByRow: Map<number, City[]> = new Map();
     
-    // Fixed buckets for one row to avoid sorting. 
-    // Indices match RenderLayer enum.
-    private _rowBuckets: Array<RenderFn[]> = [[], [], [], [], [], []];
+    // Render Buckets for Row-by-Row drawing (Removes need for sorting)
+    private _bucketInfra: (() => void)[] = [];
+    private _bucketContent: (() => void)[] = [];
+    private _bucketUnits: (() => void)[] = [];
 
     constructor(map: GameMap, hexSize: number = 64) {
         this.map = map;
@@ -81,15 +81,16 @@ export class MapRenderer {
         time: number = 0,
         windStrength: number = 0.5
     ): void {
-        const zoom = camera.zoom;
-        const hexSizeZoom = this.hexSize * zoom;
-        const visibleWorldWidth = camera.width / zoom;
-        const visibleWorldHeight = camera.height / zoom;
+        const camZoom = camera.zoom;
+        const visibleWorldWidth = camera.width / camZoom;
+        const visibleWorldHeight = camera.height / camZoom;
 
-        // Optimization: Pre-calculate constants for loop
-        const margin = 2; 
+        // View Culling Calculation
+        const margin = 2; // Small margin for base tiles
         const startRow = Math.floor(camera.y / this.vertDist) - margin;
         const endRow = Math.ceil((camera.y + visibleWorldHeight) / this.vertDist) + margin;
+        
+        // Horizontal culling is approximate due to stagger
         const startCol = Math.floor(camera.x / this.horizDist) - margin;
         const endCol = Math.ceil((camera.x + visibleWorldWidth) / this.horizDist) + margin;
 
@@ -101,144 +102,172 @@ export class MapRenderer {
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
 
-        // --- LAYER 1: BASE TILES ---
-        // Drawn directly without queueing for speed, as they are the background.
-        for (let r = minRow; r < maxRow; r++) {
-            for (let c = minCol; c < maxCol; c++) {
-                const q = c - (r - (r & 1)) / 2;
-                if (!this.map.isValid(q, r)) continue;
-
-                const tile = this.map.getTile(q, r);
-                if (!tile) continue;
-
-                // Optimization: Inline hexToScreen math to avoid object allocation
-                const worldX = this.hexSize * Math.sqrt(3) * (q + r/2);
-                const worldY = (this.hexSize * 1.5 * r) * ISO_FACTOR;
-                const screenX = worldX * zoom - camera.x * zoom;
-                const screenY = worldY * zoom - camera.y * zoom;
-
-                let visualTerrain = tile.terrain;
-                
-                // If it's a 3D sprite biome or Forest, use PLAINS/Base as underlay
-                if (tile.terrain === TerrainType.MOUNTAIN || 
-                    tile.terrain === TerrainType.HILLS || 
-                    tile.terrain === TerrainType.DESERT || 
-                    tile.terrain === TerrainType.FOREST) {
-                    visualTerrain = TerrainType.PLAINS;
-                }
-
-                // Optimization: Use cached canvas drawer
-                TileDrawer.drawTexturedHex(ctx, screenX, screenY, hexSizeZoom, visualTerrain, this.assets, {q,r}, this.desertData);
-            }
-        }
-
-        // --- LAYER 2: LARGE BIOME SPRITES ---
-        // Optimization: Strict Culling before Draw
-        const camRight = camera.width;
-        const camBottom = camera.height;
-
-        for (const sprite of this.terrainSprites) {
-            const destW = Math.floor(sprite.canvas.width * zoom);
-            const destH = Math.floor(sprite.canvas.height * zoom);
-            const destX = Math.floor((sprite.x - camera.x) * zoom);
-            const destY = Math.floor((sprite.y - camera.y) * zoom);
-
-            // Simple view culling
-            if (destX > camRight || destY > camBottom || destX + destW < 0 || destY + destH < 0) continue;
-
-            ctx.drawImage(sprite.canvas, destX, destY, destW, destH);
-        }
-
-        // --- LAYER 3: SORTED ENTITIES (Bucketed Row-by-Row) ---
-        
-        // 1. Clear and Populate Pools
+        // --- PRE-PROCESSING: Bucket Entities (Reuse Pools) ---
         this._unitsByRow.clear();
         this._citiesByRow.clear();
 
         for (const u of units) {
+            // Fast visual row approximation
             const r = Math.round(u.visualPos.r);
-            if (!this._unitsByRow.has(r)) this._unitsByRow.set(r, []);
-            this._unitsByRow.get(r)!.push(u);
+            // View Culling for Units
+            if (r >= minRow && r < maxRow) {
+                if (!this._unitsByRow.has(r)) this._unitsByRow.set(r, []);
+                this._unitsByRow.get(r)!.push(u);
+            }
         }
 
         for (const c of cities) {
             const r = c.location.r;
-            if (!this._citiesByRow.has(r)) this._citiesByRow.set(r, []);
-            this._citiesByRow.get(r)!.push(c);
+            if (r >= minRow && r < maxRow) {
+                if (!this._citiesByRow.has(r)) this._citiesByRow.set(r, []);
+                this._citiesByRow.get(r)!.push(c);
+            }
         }
 
-        // Optimization: Re-use enqueue closure
-        const enqueue = (depth: number, layer: RenderLayer, draw: RenderFn) => {
-            // We ignore depth inside the bucket because within a single row, 
-            // the layer order (Terrain -> Infra -> Content -> Unit) determines occlusion.
-            this._rowBuckets[layer].push(draw);
-        };
+        // Pre-calc visual dimensions for sprite loop optimization
+        const finalHexSize = this.hexSize * camZoom;
+        const halfHexW = (this.hexWidth / 2) * camZoom;
+        const rowHeightStep = this.vertDist * camZoom;
+        const colWidthStep = this.horizDist * camZoom;
 
-        // 2. Iterate Visible Rows
+        // --- LAYER 1: BASE TILES & DECALS ---
+        // Optimization: Incremental coordinate calculation
+        // y = (hexSize * 1.5 * r) * ISO_FACTOR * zoom - camera.y * zoom
+        // x = hexSize * sqrt(3) * (c - (r - (r&1))/2 + r/2) * zoom ... simplified:
+        // x = (col * width + (r%2 * width/2)) - camX
+        
+        let currentScreenY = (minRow * this.vertDist - camera.y) * camZoom;
+
         for (let r = minRow; r < maxRow; r++) {
-            // Clear buckets for this row
-            for(let i=0; i<6; i++) {
-                this._rowBuckets[i].length = 0;
-            }
+            const isOdd = r & 1;
+            // Calculate starting X for this row
+            // Axial q = c - (r - (r&1)) / 2
+            // World X = Width * (q + r/2)
+            // Algebraic simplification for Grid Col C: X = Width * (C + (r%2)/2)
+            
+            let currentScreenX = (minCol * this.hexWidth + (isOdd ? this.hexWidth / 2 : 0) - camera.x) * camZoom;
 
-            // 2.1 Tiles in this row
             for (let c = minCol; c < maxCol; c++) {
                 const q = c - (r - (r & 1)) / 2;
-                if (!this.map.isValid(q, r)) continue;
-                const tile = this.map.getTile(q, r);
-                if (!tile) continue;
-
-                // Manual hexToScreen again for speed
-                const worldX = this.hexSize * Math.sqrt(3) * (q + r/2);
-                const worldY = (this.hexSize * 1.5 * r) * ISO_FACTOR;
-                const screenY = worldY * zoom - camera.y * zoom; // Used for depth, but irrelevant in bucket logic
-
-                // Add Infrastructure (Roads)
-                TileDrawer.enqueueInfrastructure(enqueue, ctx, {q, r}, tile, camera, this.hexSize, this.assets, this.map, selectedUnit, validMoves);
                 
-                // Add Content (Resources & FOREST TREES)
-                TileDrawer.enqueueContent(
-                    enqueue, 
-                    ctx, 
-                    {q,r}, 
-                    screenY, 
-                    tile, 
-                    camera, 
-                    this.hexSize, 
-                    this.assets, 
-                    this.animalManager,
-                    this.forestData, 
-                    this.desertData, 
-                    time, 
-                    windStrength
-                );
+                if (this.map.isValid(q, r)) {
+                    const tile = this.map.getTile(q, r);
+                    if (tile) {
+                        let visualTerrain = tile.terrain;
+                        
+                        // Underlay for 3D biomes
+                        if (tile.terrain === TerrainType.MOUNTAIN || 
+                            tile.terrain === TerrainType.HILLS || 
+                            tile.terrain === TerrainType.DESERT || 
+                            tile.terrain === TerrainType.FOREST) {
+                            visualTerrain = TerrainType.PLAINS;
+                        }
+
+                        // Direct call to static drawer, passing pre-calced coords
+                        TileDrawer.drawTexturedHex(ctx, currentScreenX, currentScreenY, finalHexSize, visualTerrain, this.assets);
+                    }
+                }
+                currentScreenX += colWidthStep;
+            }
+            currentScreenY += rowHeightStep;
+        }
+
+        // --- LAYER 2: LARGE BIOME SPRITES ---
+        // Optimized Culling: Check bounds in World Space first
+        const camLeft = camera.x;
+        const camTop = camera.y;
+        const camRight = camera.x + visibleWorldWidth;
+        const camBottom = camera.y + visibleWorldHeight;
+
+        for (const sprite of this.terrainSprites) {
+            const w = sprite.canvas.width;
+            const h = sprite.canvas.height;
+
+            // Fast AABB Check
+            if (sprite.x > camRight || sprite.x + w < camLeft || 
+                sprite.y > camBottom || sprite.y + h < camTop) {
+                continue;
             }
 
-            // 2.2 Cities in this row
+            const destX = Math.floor((sprite.x - camLeft) * camZoom);
+            const destY = Math.floor((sprite.y - camTop) * camZoom);
+            const destW = Math.floor(w * camZoom);
+            const destH = Math.floor(h * camZoom);
+
+            ctx.drawImage(sprite.canvas, destX, destY, destW, destH);
+        }
+
+        // --- LAYER 3: SORTED ENTITIES (Row-by-Row with Buckets) ---
+        // We reuse the incremental loop approach but fill buckets
+        
+        currentScreenY = (minRow * this.vertDist - camera.y) * camZoom;
+
+        for (let r = minRow; r < maxRow; r++) {
+            const isOdd = r & 1;
+            let currentScreenX = (minCol * this.hexWidth + (isOdd ? this.hexWidth / 2 : 0) - camera.x) * camZoom;
+
+            // Clear buckets for this row (alloc-free)
+            this._bucketInfra.length = 0;
+            this._bucketContent.length = 0;
+            this._bucketUnits.length = 0;
+
+            // 3.1 Tiles in this row
+            for (let c = minCol; c < maxCol; c++) {
+                const q = c - (r - (r & 1)) / 2;
+                if (!this.map.isValid(q, r)) {
+                    currentScreenX += colWidthStep;
+                    continue;
+                }
+                
+                const tile = this.map.getTile(q, r);
+                if (tile) {
+                    // Populate buckets via Drawers
+                    TileDrawer.populateBuckets(
+                        this._bucketInfra,
+                        this._bucketContent,
+                        ctx, 
+                        {q, r}, 
+                        currentScreenX,
+                        currentScreenY, 
+                        tile, 
+                        camera, 
+                        this.hexSize, 
+                        this.assets, 
+                        this.map,
+                        selectedUnit,
+                        validMoves,
+                        this.animalManager,
+                        this.forestData, 
+                        this.desertData, 
+                        time, 
+                        windStrength
+                    );
+                }
+                currentScreenX += colWidthStep;
+            }
+
+            // 3.2 Cities in this row
             const rowCities = this._citiesByRow.get(r);
             if (rowCities) {
-                CityDrawer.enqueueCity(enqueue, ctx, rowCities, camera, this.hexSize, this.assets);
+                CityDrawer.populateBucket(this._bucketUnits, ctx, rowCities, camera, this.hexSize, this.assets);
             }
 
-            // 2.3 Units in this row
+            // 3.3 Units in this row
             const rowUnits = this._unitsByRow.get(r);
             if (rowUnits) {
-                UnitDrawer.enqueueUnits(enqueue, ctx, rowUnits, selectedUnit, camera, this.hexSize, this.assets);
+                UnitDrawer.populateBucket(this._bucketUnits, ctx, rowUnits, selectedUnit, camera, this.hexSize, this.assets);
             }
 
-            // 3. Draw buckets in order (0 to 5)
+            // 3.4 Execute Draw Calls in Layer Order
             // No sorting needed!
-            for(let i=0; i<6; i++) {
-                const bucket = this._rowBuckets[i];
-                const len = bucket.length;
-                for(let j=0; j<len; j++) {
-                    bucket[j]();
-                }
-            }
+            for (const draw of this._bucketInfra) draw();
+            for (const draw of this._bucketContent) draw();
+            for (const draw of this._bucketUnits) draw();
+
+            currentScreenY += rowHeightStep;
         }
 
         // --- OVERLAYS ---
-        // Drawn absolutely last on top of everything
         OverlayDrawer.drawRadiusHighlight(ctx, camera, this.map, this.hexSize, this.assets, previewHighlightHex, selectedHex);
         OverlayDrawer.drawPath(ctx, path, selectedUnit, camera, this.hexSize, this.assets);
         OverlayDrawer.drawSelectionCursor(ctx, camera, this.hexSize, this.assets, selectedHex, selectedUnit);

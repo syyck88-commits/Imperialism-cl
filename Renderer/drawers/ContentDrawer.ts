@@ -2,7 +2,7 @@
 import { TileData, ImprovementType, ResourceType, TerrainType } from '../../Grid/GameMap';
 import { Hex } from '../../Grid/HexMath';
 import { AssetManager } from '../AssetManager';
-import { Camera, hexToScreen, ISO_FACTOR } from '../RenderUtils';
+import { Camera, ISO_FACTOR } from '../RenderUtils';
 import { AnimalManager } from '../effects/AnimalManager';
 import { SpriteVisualConfig } from '../assets/SpriteVisuals';
 
@@ -124,13 +124,15 @@ function drawResourceClump(
 export function drawTileContent(
     hex: Hex, 
     tile: TileData, 
+    x: number, // Screen X
+    y: number, // Screen Y
     camera: Camera, 
     hexSize: number, 
     assets: AssetManager,
     animalManager: AnimalManager
 ) {
     return (ctx: CanvasRenderingContext2D) => {
-        const { x, y } = hexToScreen(hex.q, hex.r, camera, hexSize);
+        // x, y are already screen coordinates
         const size = hexSize * camera.zoom;
         const isoOffset = size * -0.2;
 

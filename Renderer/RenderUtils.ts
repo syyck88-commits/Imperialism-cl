@@ -9,15 +9,6 @@ export interface Camera {
   zoom: number;
 }
 
-export enum RenderLayer {
-    TERRAIN_BASE = 0,
-    DECAL = 1,
-    INFRASTRUCTURE = 2,
-    CONTENT = 3,
-    STRUCTURE = 4,
-    UNIT = 5
-}
-
 export const ISO_FACTOR = Math.sqrt(3) / 4; 
 
 /**
@@ -34,7 +25,36 @@ export const hexToScreen = (q: number, r: number, camera: Camera, hexSize: numbe
     return { x: screenX, y: screenY };
 };
 
+// Cache for Path2D objects based on hex size
+const pathCache = new Map<number, Path2D>();
+
+/**
+ * Returns a cached Path2D for a hexagon of the given size.
+ */
+export const getHexPath2D = (size: number, scaleY: number = 1.0): Path2D => {
+    // We key by size. If scaleY varies wildly, we might need a composite key,
+    // but typically scaleY is constant (ISO_FACTOR) or 1.0. 
+    // For this engine, we assume scaleY is usually ISO_FACTOR for map tiles.
+    // If you use different scales, append scale to key.
+    const key = (size * 1000) + scaleY; 
+    
+    if (!pathCache.has(key)) {
+        const path = new Path2D();
+        for (let i = 0; i < 6; i++) {
+            const angle = (Math.PI / 180) * (60 * i + 30);
+            const px = size * Math.cos(angle);
+            const py = size * Math.sin(angle) * scaleY;
+            if (i === 0) path.moveTo(px, py);
+            else path.lineTo(px, py);
+        }
+        path.closePath();
+        pathCache.set(key, path);
+    }
+    return pathCache.get(key)!;
+};
+
 export const drawHexPath = (ctx: CanvasRenderingContext2D, x: number, y: number, size: number, scaleY: number = 1.0) => {
+    // For immediate mode drawing without Path2D (legacy support or dynamic shapes)
     ctx.beginPath();
     for (let i = 0; i < 6; i++) {
         const angle = (Math.PI / 180) * (60 * i + 30);
@@ -44,17 +64,4 @@ export const drawHexPath = (ctx: CanvasRenderingContext2D, x: number, y: number,
         else ctx.lineTo(px, py);
     }
     ctx.closePath();
-};
-
-export const createHexPath = (size: number, scaleY: number = 1.0): Path2D => {
-    const path = new Path2D();
-    for (let i = 0; i < 6; i++) {
-        const angle = (Math.PI / 180) * (60 * i + 30);
-        const px = size * Math.cos(angle);
-        const py = (size * Math.sin(angle) * scaleY);
-        if (i === 0) path.moveTo(px, py);
-        else path.lineTo(px, py);
-    }
-    path.closePath();
-    return path;
 };

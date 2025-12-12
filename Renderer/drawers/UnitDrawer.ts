@@ -1,14 +1,12 @@
 
 import { Unit } from '../../Entities/Unit';
 import { AssetManager } from '../AssetManager';
-import { Camera, hexToScreen, ISO_FACTOR, RenderLayer } from '../RenderUtils';
-
-type EnqueueFn = (depth: number, layer: RenderLayer, draw: () => void) => void;
+import { Camera, hexToScreen, ISO_FACTOR } from '../RenderUtils';
 
 export class UnitDrawer {
 
-    public static enqueueUnits(
-        enqueue: EnqueueFn,
+    public static populateBucket(
+        bucket: (() => void)[],
         ctx: CanvasRenderingContext2D,
         units: Unit[],
         selectedUnit: Unit | null,
@@ -21,7 +19,7 @@ export class UnitDrawer {
             // Culling
             if (x < -50 || x > camera.width + 50 || y < -50 || y > camera.height + 50) continue;
 
-            enqueue(y, RenderLayer.UNIT, () => this.drawUnit(unit, selectedUnit, x, y, hexSize, camera, assets)(ctx));
+            bucket.push(() => this.drawUnit(unit, selectedUnit, x, y, hexSize, camera, assets)(ctx));
         }
     }
 
@@ -79,8 +77,6 @@ export class UnitDrawer {
                      ctx.fill();
                 }
 
-                // Optimization: Removed ctx.filter='drop-shadow(...)' as it is very expensive.
-                // The blob shadow above provides sufficient depth cues.
                 ctx.drawImage(sprite, drawX, drawY, drawW, drawH);
             } else {
                 ctx.font = `${Math.floor(size * 0.8)}px sans-serif`;

@@ -1,7 +1,7 @@
 
 import { TerrainType, ResourceType } from '../Grid/GameMap';
 import { UnitType } from '../Entities/Unit';
-import { ISO_FACTOR, drawHexPath, createHexPath } from './RenderUtils';
+import { ISO_FACTOR } from './RenderUtils';
 import { 
     generateBaseFallback, 
     generateForestFallback, 
@@ -35,11 +35,6 @@ export class AssetManager {
   // Visual Configuration Registry
   private spriteConfigs: Map<string, SpriteVisualConfig> = new Map();
 
-  // Optimization: Cached Canvases for Base Tiles
-  public baseTileCache: Map<string, HTMLCanvasElement> = new Map();
-  // Optimization: Cached Path2D for UI
-  public hexPath: Path2D;
-
   public spriteMap: Record<TerrainType, { col: number, row: number }> = {
       [TerrainType.WATER]:    { col: 0, row: 0 },
       [TerrainType.PLAINS]:   { col: 1, row: 0 },
@@ -69,9 +64,6 @@ export class AssetManager {
     this.uiTileW = Math.ceil(Math.sqrt(3) * this.uiBaseSize); 
     this.uiTileH = Math.ceil((this.uiBaseSize * 2 * ISO_FACTOR) + 4); 
 
-    // Generate Path Cache
-    this.hexPath = createHexPath(1, ISO_FACTOR);
-
     // Use extracted generators
     generateFallbackAtlas(this.terrainTiles, this.ATLAS_COLS, this.ATLAS_ROWS);
     this.baseSprites = generateBaseFallback();
@@ -79,73 +71,8 @@ export class AssetManager {
     this.dunePattern = generateDunePattern();
     generateInterfaceSprites(this.uiSprites, this.uiMap, this.uiTileW, this.uiTileH, this.uiBaseSize);
     
-    this.initBaseTileCache();
     this.loadAssets();
     this.loadConfigs();
-  }
-
-  // Pre-render base tiles at high res to avoid drawing paths every frame
-  private initBaseTileCache() {
-      const highResSize = 128; // High quality base
-      const types = [
-          { key: 'land', color: '#c9a67f', shadow: '#a68560' },
-          { key: 'water', color: '#3b82f6', shadow: '#1e3a8a' },
-          { key: 'desert', color: '#E6C88C', shadow: '#C69C6D' }
-      ];
-
-      const tileW = Math.ceil(Math.sqrt(3) * highResSize);
-      const tileH = Math.ceil((highResSize * 2 * ISO_FACTOR) + BLOCK_DEPTH + 4);
-
-      types.forEach(t => {
-          const canvas = document.createElement('canvas');
-          canvas.width = tileW;
-          canvas.height = tileH;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-              const cx = tileW / 2;
-              const cy = (tileH - BLOCK_DEPTH) / 2;
-              const r = highResSize - 1;
-
-              // Draw depth sides
-              ctx.fillStyle = t.shadow;
-              ctx.beginPath();
-              const pts = [];
-              for(let i=0; i<6; i++) {
-                      const angle = (Math.PI / 180) * (60 * i + 30);
-                      pts.push({
-                          x: cx + r * Math.cos(angle),
-                          y: cy + (r * Math.sin(angle) * ISO_FACTOR)
-                      });
-              }
-              ctx.moveTo(pts[0].x, pts[0].y);
-              ctx.lineTo(pts[1].x, pts[1].y);
-              ctx.lineTo(pts[2].x, pts[2].y);
-              ctx.lineTo(pts[3].x, pts[3].y);
-              ctx.lineTo(pts[3].x, pts[3].y + BLOCK_DEPTH);
-              ctx.lineTo(pts[2].x, pts[2].y + BLOCK_DEPTH);
-              ctx.lineTo(pts[1].x, pts[1].y + BLOCK_DEPTH);
-              ctx.lineTo(pts[0].x, pts[0].y + BLOCK_DEPTH);
-              ctx.closePath();
-              ctx.fill();
-
-              // Draw Top Face
-              ctx.beginPath();
-              drawHexPath(ctx, cx, cy, r, ISO_FACTOR);
-              ctx.closePath();
-              ctx.fillStyle = t.color;
-              ctx.fill();
-
-              // Slight edge highlight
-              ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-              ctx.lineWidth = 2;
-              ctx.stroke();
-          }
-          this.baseTileCache.set(t.key, canvas);
-      });
-  }
-
-  public getCachedBaseTile(type: 'land' | 'water' | 'desert'): HTMLCanvasElement | null {
-      return this.baseTileCache.get(type) || null;
   }
 
   private loadConfigs() {
@@ -170,17 +97,6 @@ export class AssetManager {
           }
       } catch (e) {
           console.error("Failed to load sprite configs", e);
-      }
-  }
-
-  private setBaseTileCacheFromSprite(key: 'land' | 'water' | 'desert', img: HTMLImageElement) {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-          ctx.drawImage(img, 0, 0);
-          this.baseTileCache.set(key, canvas);
       }
   }
 
@@ -230,50 +146,23 @@ export class AssetManager {
       return img ? img.src : null;
   }
 
-    private async loadBaseSprite(
-        name: 'base_land' | 'base_water' | 'base_desert',
-        fallbackUrl?: string,
-    ) {
-        try {
-            const response = await fetch(`/sprites/${name}.png`);
-            if (response.ok) {
-                const blob = await response.blob();
-                const img = new Image();
-                img.src = URL.createObjectURL(blob);
-                await img.decode();
-                this.baseSprites.set(name, img);
-
-                const cacheKey = name.replace('base_', '') as 'land' | 'water' | 'desert';
-                this.setBaseTileCacheFromSprite(cacheKey, img);
-                return;
-            }
-        } catch (e) {
-            // Ignore fetch/network errors and fall back to bundled assets below
-        }
-
-        if (!fallbackUrl) return;
-
-        try {
-            const img = new Image();
-            img.src = fallbackUrl;
-            await img.decode();
-            this.baseSprites.set(name, img);
-
-            const cacheKey = name.replace('base_', '') as 'land' | 'water' | 'desert';
-            this.setBaseTileCacheFromSprite(cacheKey, img);
-        } catch (e) {
-            // Ignore and keep fallback canvases
-        }
-    }
-
-    // Method A: Auto-Loading Local Assets (Blobs)
-    private async loadAssets() {
-        // 0. Load Base Tiles
-        const basePromises = [
-            this.loadBaseSprite('base_land', new URL('../sprites/base_land.png', import.meta.url).href),
-            this.loadBaseSprite('base_water'),
-            this.loadBaseSprite('base_desert'),
-        ];
+  // Method A: Auto-Loading Local Assets (Blobs)
+  private async loadAssets() {
+      // 0. Load Base Tiles
+      const baseFiles = ['base_land', 'base_water', 'base_desert'];
+      const basePromises = baseFiles.map(async (name) => {
+          try {
+              const response = await fetch(`/sprites/${name}.png`);
+              if (!response.ok) return;
+              const blob = await response.blob();
+              const img = new Image();
+              img.src = URL.createObjectURL(blob);
+              await img.decode();
+              this.baseSprites.set(name, img);
+          } catch (e) {
+              // Ignore
+          }
+      });
 
       // 0.5 Load Forest Sprites (forest_1 to forest_4)
       const forestPromises = [1, 2, 3, 4].map(async (idx) => {

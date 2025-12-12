@@ -1,14 +1,12 @@
 
 import { City } from '../../Entities/City';
 import { AssetManager } from '../AssetManager';
-import { Camera, hexToScreen, ISO_FACTOR, RenderLayer } from '../RenderUtils';
-
-type EnqueueFn = (depth: number, layer: RenderLayer, draw: () => void) => void;
+import { Camera, hexToScreen, ISO_FACTOR } from '../RenderUtils';
 
 export class CityDrawer {
 
-    public static enqueueCity(
-        enqueue: EnqueueFn,
+    public static populateBucket(
+        bucket: (() => void)[],
         ctx: CanvasRenderingContext2D,
         cities: City[],
         camera: Camera,
@@ -17,16 +15,16 @@ export class CityDrawer {
     ) {
         for (const city of cities) {
             const { x, y } = hexToScreen(city.location.q, city.location.r, camera, hexSize);
-            // Culling
+            // Culling (Relaxed to ensure large city sprites don't pop)
             if (x < -200 || x > camera.width + 200 || y < -200 || y > camera.height + 200) continue;
 
             const config = assets.getConfig('STR_capital');
 
             // Pass 1: Base decal layer
-            enqueue(y, RenderLayer.DECAL, () => this.drawCity(assets.getStructureSprite('capital'), city, x, y, hexSize * camera.zoom, 'base', config, camera.zoom)(ctx));
+            bucket.push(() => this.drawCity(assets.getStructureSprite('capital'), city, x, y, hexSize * camera.zoom, 'base', config, camera.zoom)(ctx));
 
             // Pass 2: Top structure layer
-            enqueue(y, RenderLayer.STRUCTURE, () => this.drawCity(assets.getStructureSprite('capital'), city, x, y, hexSize * camera.zoom, 'top', config, camera.zoom)(ctx));
+            bucket.push(() => this.drawCity(assets.getStructureSprite('capital'), city, x, y, hexSize * camera.zoom, 'top', config, camera.zoom)(ctx));
         }
     }
 
