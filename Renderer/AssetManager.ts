@@ -173,6 +173,17 @@ export class AssetManager {
       }
   }
 
+  private setBaseTileCacheFromSprite(key: 'land' | 'water' | 'desert', img: HTMLImageElement) {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+          ctx.drawImage(img, 0, 0);
+          this.baseTileCache.set(key, canvas);
+      }
+  }
+
   public getConfig(key: string): SpriteVisualConfig {
       return this.spriteConfigs.get(key) || { ...DEFAULT_SPRITE_CONFIG };
   }
@@ -219,23 +230,50 @@ export class AssetManager {
       return img ? img.src : null;
   }
 
-  // Method A: Auto-Loading Local Assets (Blobs)
-  private async loadAssets() {
-      // 0. Load Base Tiles
-      const baseFiles = ['base_land', 'base_water', 'base_desert'];
-      const basePromises = baseFiles.map(async (name) => {
-          try {
-              const response = await fetch(`/sprites/${name}.png`);
-              if (!response.ok) return;
-              const blob = await response.blob();
-              const img = new Image();
-              img.src = URL.createObjectURL(blob);
-              await img.decode();
-              this.baseSprites.set(name, img);
-          } catch (e) {
-              // Ignore
-          }
-      });
+    private async loadBaseSprite(
+        name: 'base_land' | 'base_water' | 'base_desert',
+        fallbackUrl?: string,
+    ) {
+        try {
+            const response = await fetch(`/sprites/${name}.png`);
+            if (response.ok) {
+                const blob = await response.blob();
+                const img = new Image();
+                img.src = URL.createObjectURL(blob);
+                await img.decode();
+                this.baseSprites.set(name, img);
+
+                const cacheKey = name.replace('base_', '') as 'land' | 'water' | 'desert';
+                this.setBaseTileCacheFromSprite(cacheKey, img);
+                return;
+            }
+        } catch (e) {
+            // Ignore fetch/network errors and fall back to bundled assets below
+        }
+
+        if (!fallbackUrl) return;
+
+        try {
+            const img = new Image();
+            img.src = fallbackUrl;
+            await img.decode();
+            this.baseSprites.set(name, img);
+
+            const cacheKey = name.replace('base_', '') as 'land' | 'water' | 'desert';
+            this.setBaseTileCacheFromSprite(cacheKey, img);
+        } catch (e) {
+            // Ignore and keep fallback canvases
+        }
+    }
+
+    // Method A: Auto-Loading Local Assets (Blobs)
+    private async loadAssets() {
+        // 0. Load Base Tiles
+        const basePromises = [
+            this.loadBaseSprite('base_land', new URL('../sprites/base_land.png', import.meta.url).href),
+            this.loadBaseSprite('base_water'),
+            this.loadBaseSprite('base_desert'),
+        ];
 
       // 0.5 Load Forest Sprites (forest_1 to forest_4)
       const forestPromises = [1, 2, 3, 4].map(async (idx) => {
