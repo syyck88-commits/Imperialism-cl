@@ -1,5 +1,4 @@
 
-
 import { Hex } from '../Grid/HexMath';
 
 export interface Camera {
@@ -8,6 +7,15 @@ export interface Camera {
   width: number;
   height: number;
   zoom: number;
+}
+
+export enum RenderLayer {
+    TERRAIN_BASE = 0,
+    DECAL = 1,
+    INFRASTRUCTURE = 2,
+    CONTENT = 3,
+    STRUCTURE = 4,
+    UNIT = 5
 }
 
 export const ISO_FACTOR = Math.sqrt(3) / 4; 
@@ -36,4 +44,17 @@ export const drawHexPath = (ctx: CanvasRenderingContext2D, x: number, y: number,
         else ctx.lineTo(px, py);
     }
     ctx.closePath();
+};
+
+export const createHexPath = (size: number, scaleY: number = 1.0): Path2D => {
+    const path = new Path2D();
+    for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI / 180) * (60 * i + 30);
+        const px = size * Math.cos(angle);
+        const py = (size * Math.sin(angle) * scaleY);
+        if (i === 0) path.moveTo(px, py);
+        else path.lineTo(px, py);
+    }
+    path.closePath();
+    return path;
 };

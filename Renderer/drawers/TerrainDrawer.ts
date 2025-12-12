@@ -18,30 +18,46 @@ export function drawTexturedHex(
     type: TerrainType,
     assets: AssetManager
 ) {
+    // 128 is the fixed resolution of our cached base tiles
+    const CACHE_SIZE = 128;
     const gridWidth = Math.sqrt(3) * size;
-    const scale = gridWidth / 128; 
-    const drawW = 128 * scale;
+    // Calculate draw width based on aspect ratio
+    // The cache is generated with tileW = 128 (approx)
+    // We scale the cached image to match current grid size
+    const drawW = gridWidth; 
     
     // Base layer: always draw land or water to prevent gaps
     let baseType: 'water' | 'land' | 'desert' = 'land';
     if (type === TerrainType.WATER) baseType = 'water';
     if (type === TerrainType.DESERT) baseType = 'desert';
     
-    const baseSprite = assets.getBaseSprite(baseType);
+    const cachedTile = assets.getCachedBaseTile(baseType);
     
-    if (baseSprite) {
-        const aspect = baseSprite.width / baseSprite.height;
-        const spriteH = drawW / aspect;
-        ctx.drawImage(baseSprite, x - drawW/2, y - spriteH * 0.4, drawW, spriteH);
+    if (cachedTile) {
+        const aspect = cachedTile.width / cachedTile.height;
+        const drawH = drawW / aspect;
+        
+        // Offset Y to center visually based on the block height
+        // The cache includes the 3D depth, so we align the top surface
+        ctx.drawImage(cachedTile, x - drawW/2, y - drawH * 0.4, drawW, drawH);
+    } else {
+        // Fallback to old sprite method if cache fails
+        const baseSprite = assets.getBaseSprite(baseType);
+        if (baseSprite) {
+            const scale = gridWidth / 128; 
+            const dW = 128 * scale;
+            const aspect = baseSprite.width / baseSprite.height;
+            const spriteH = dW / aspect;
+            ctx.drawImage(baseSprite, x - dW/2, y - spriteH * 0.4, dW, spriteH);
+        }
     }
 
     const isProcedural = type === TerrainType.FOREST || type === TerrainType.DESERT || type === TerrainType.MOUNTAIN || type === TerrainType.HILLS;
-    const drawH = drawW;
-
+    
     if (!isProcedural && type !== TerrainType.PLAINS && type !== TerrainType.WATER) {
         const overlaySprite = assets.getSprite(type);
         if (overlaySprite) {
-            ctx.drawImage(overlaySprite, x - drawW/2, y - drawH/2, drawW, drawH);
+            ctx.drawImage(overlaySprite, x - drawW/2, y - drawW/2, drawW, drawW);
         }
     }
 }

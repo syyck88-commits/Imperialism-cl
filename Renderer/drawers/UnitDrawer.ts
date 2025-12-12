@@ -1,13 +1,7 @@
 
-
-
 import { Unit } from '../../Entities/Unit';
 import { AssetManager } from '../AssetManager';
-import { Camera, hexToScreen, ISO_FACTOR } from '../RenderUtils';
-
-enum RenderLayer {
-    UNIT = 5
-}
+import { Camera, hexToScreen, ISO_FACTOR, RenderLayer } from '../RenderUtils';
 
 type EnqueueFn = (depth: number, layer: RenderLayer, draw: () => void) => void;
 

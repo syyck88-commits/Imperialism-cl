@@ -1,11 +1,9 @@
 
-
-
 import { GameMap, TerrainType, TileData, ImprovementType, ResourceType } from '../../Grid/GameMap';
 import { Hex, areHexesEqual } from '../../Grid/HexMath';
 import { Unit } from '../../Entities/Unit';
 import { AssetManager } from '../AssetManager';
-import { Camera, hexToScreen, ISO_FACTOR } from '../RenderUtils';
+import { Camera, hexToScreen, ISO_FACTOR, RenderLayer } from '../RenderUtils';
 import { AnimalManager } from '../effects/AnimalManager';
 
 // Sub-drawers
@@ -13,12 +11,6 @@ import { AnimalManager } from '../effects/AnimalManager';
 import { drawTexturedHex as drawBaseTerrain, drawForestTile } from './TerrainDrawer';
 import { drawTileContent } from './ContentDrawer';
 import { drawTileConnections, isConnectable } from './InfrastructureDrawer';
-
-enum RenderLayer {
-    TERRAIN = 0,
-    INFRASTRUCTURE = 2,
-    CONTENT = 3
-}
 
 type EnqueueFn = (depth: number, layer: RenderLayer, draw: () => void) => void;
 

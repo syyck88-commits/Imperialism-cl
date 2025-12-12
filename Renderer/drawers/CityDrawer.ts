@@ -1,12 +1,7 @@
 
 import { City } from '../../Entities/City';
 import { AssetManager } from '../AssetManager';
-import { Camera, hexToScreen, ISO_FACTOR } from '../RenderUtils';
-
-enum RenderLayer {
-    DECAL = 1,
-    STRUCTURE = 4,
-}
+import { Camera, hexToScreen, ISO_FACTOR, RenderLayer } from '../RenderUtils';
 
 type EnqueueFn = (depth: number, layer: RenderLayer, draw: () => void) => void;
 

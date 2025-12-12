@@ -1,12 +1,10 @@
 
-
-
 import { GameMap, TerrainType, TileData } from '../Grid/GameMap';
 import { Hex, areHexesEqual, hexToString } from '../Grid/HexMath';
 import { City } from '../Entities/City';
 import { Unit } from '../Entities/Unit';
 import { AssetManager } from './AssetManager';
-import { Camera, hexToScreen, ISO_FACTOR } from './RenderUtils';
+import { Camera, hexToScreen, ISO_FACTOR, RenderLayer } from './RenderUtils';
 import { TerrainClustering } from './TerrainClustering';
 import { TileDrawer } from './drawers/TileDrawer';
 import { CityDrawer } from './drawers/CityDrawer';
@@ -15,22 +13,8 @@ import { OverlayDrawer } from './drawers/OverlayDrawer';
 import { TerrainErosion, TerrainSprite } from './assets/TerrainErosion';
 import { AnimalManager } from './effects/AnimalManager';
 
-// RenderLayer enum is kept for type compatibility with Drawers, 
-// but inside render() we map everything to a unified sorted queue.
-enum RenderLayer {
-    TERRAIN_BASE = 0,
-    INFRASTRUCTURE = 2,
-    CONTENT = 3,
-    UNIT = 6,
-    // Add others if strictly needed by drawers, but we override functionality
-    DECAL = 1,
-    STRUCTURE = 5
-}
-
-interface SortedRenderObject {
-    y: number;
-    draw: () => void;
-}
+// Reusable type for render function to avoid closure creation overhead
+type RenderFn = () => void;
 
 export class MapRenderer {
     public map: GameMap;
@@ -46,6 +30,14 @@ export class MapRenderer {
     private hexWidth: number;
     private vertDist: number;
     private horizDist: number;
+
+    // Optimization: Pools and caches
+    private _unitsByRow: Map<number, Unit[]> = new Map();
+    private _citiesByRow: Map<number, City[]> = new Map();
+    
+    // Fixed buckets for one row to avoid sorting. 
+    // Indices match RenderLayer enum.
+    private _rowBuckets: Array<RenderFn[]> = [[], [], [], [], [], []];
 
     constructor(map: GameMap, hexSize: number = 64) {
         this.map = map;
@@ -89,10 +81,13 @@ export class MapRenderer {
         time: number = 0,
         windStrength: number = 0.5
     ): void {
-        const visibleWorldWidth = camera.width / camera.zoom;
-        const visibleWorldHeight = camera.height / camera.zoom;
+        const zoom = camera.zoom;
+        const hexSizeZoom = this.hexSize * zoom;
+        const visibleWorldWidth = camera.width / zoom;
+        const visibleWorldHeight = camera.height / zoom;
 
-        const margin = 2; // Small margin for base tiles
+        // Optimization: Pre-calculate constants for loop
+        const margin = 2; 
         const startRow = Math.floor(camera.y / this.vertDist) - margin;
         const endRow = Math.ceil((camera.y + visibleWorldHeight) / this.vertDist) + margin;
         const startCol = Math.floor(camera.x / this.horizDist) - margin;
@@ -107,8 +102,7 @@ export class MapRenderer {
         ctx.textBaseline = 'middle';
 
         // --- LAYER 1: BASE TILES ---
-        // Draw the flat ground everywhere. 
-        // For tall biomes (Mtn/Hill/Desert/Forest), we draw PLAINS underneath to avoid holes.
+        // Drawn directly without queueing for speed, as they are the background.
         for (let r = minRow; r < maxRow; r++) {
             for (let c = minCol; c < maxCol; c++) {
                 const q = c - (r - (r & 1)) / 2;
@@ -117,11 +111,15 @@ export class MapRenderer {
                 const tile = this.map.getTile(q, r);
                 if (!tile) continue;
 
-                const tileScreen = hexToScreen(q, r, camera, this.hexSize);
+                // Optimization: Inline hexToScreen math to avoid object allocation
+                const worldX = this.hexSize * Math.sqrt(3) * (q + r/2);
+                const worldY = (this.hexSize * 1.5 * r) * ISO_FACTOR;
+                const screenX = worldX * zoom - camera.x * zoom;
+                const screenY = worldY * zoom - camera.y * zoom;
 
                 let visualTerrain = tile.terrain;
                 
-                // If it's a 3D sprite biome or Forest, use PLAINS as underlay
+                // If it's a 3D sprite biome or Forest, use PLAINS/Base as underlay
                 if (tile.terrain === TerrainType.MOUNTAIN || 
                     tile.terrain === TerrainType.HILLS || 
                     tile.terrain === TerrainType.DESERT || 
@@ -129,58 +127,59 @@ export class MapRenderer {
                     visualTerrain = TerrainType.PLAINS;
                 }
 
-                TileDrawer.drawTexturedHex(ctx, tileScreen.x, tileScreen.y, this.hexSize * camera.zoom, visualTerrain, this.assets, {q,r}, this.desertData);
+                // Optimization: Use cached canvas drawer
+                TileDrawer.drawTexturedHex(ctx, screenX, screenY, hexSizeZoom, visualTerrain, this.assets, {q,r}, this.desertData);
             }
         }
 
         // --- LAYER 2: LARGE BIOME SPRITES ---
-        // Draw all procedural terrain sprites (Mountains, etc).
-        // Since we separated biomes in generation, we don't need complex Z-sorting between them.
-        // We just draw them on top of base tiles, but BEHIND units/cities.
-        
-        // Note: terrainSprites array from TerrainErosion contains clusters.
-        // We draw them all. Sorting by strict type logic (Desert -> Hill -> Mtn) is ideal, 
-        // but here we render them in generation order which typically groups by type anyway.
+        // Optimization: Strict Culling before Draw
+        const camRight = camera.width;
+        const camBottom = camera.height;
+
         for (const sprite of this.terrainSprites) {
-            const destX = Math.floor((sprite.x - camera.x) * camera.zoom);
-            const destY = Math.floor((sprite.y - camera.y) * camera.zoom);
-            const destW = Math.floor(sprite.canvas.width * camera.zoom);
-            const destH = Math.floor(sprite.canvas.height * camera.zoom);
+            const destW = Math.floor(sprite.canvas.width * zoom);
+            const destH = Math.floor(sprite.canvas.height * zoom);
+            const destX = Math.floor((sprite.x - camera.x) * zoom);
+            const destY = Math.floor((sprite.y - camera.y) * zoom);
 
             // Simple view culling
-            if (destX + destW < 0 || destX > camera.width || 
-                destY + destH < 0 || destY > camera.height) continue;
+            if (destX > camRight || destY > camBottom || destX + destW < 0 || destY + destH < 0) continue;
 
             ctx.drawImage(sprite.canvas, destX, destY, destW, destH);
         }
 
-        // --- LAYER 3: SORTED ENTITIES (Row-by-Row Painter's Algorithm) ---
-        // Forests, Infrastructure, Cities, Units, Resources.
-        // Optimized: Instead of one global sort, we process row by row.
+        // --- LAYER 3: SORTED ENTITIES (Bucketed Row-by-Row) ---
         
-        // 1. Bucket Dynamic Entities by Row for O(N) access inside loop
-        const unitsByRow = new Map<number, Unit[]>();
+        // 1. Clear and Populate Pools
+        this._unitsByRow.clear();
+        this._citiesByRow.clear();
+
         for (const u of units) {
             const r = Math.round(u.visualPos.r);
-            if (!unitsByRow.has(r)) unitsByRow.set(r, []);
-            unitsByRow.get(r)!.push(u);
+            if (!this._unitsByRow.has(r)) this._unitsByRow.set(r, []);
+            this._unitsByRow.get(r)!.push(u);
         }
 
-        const citiesByRow = new Map<number, City[]>();
         for (const c of cities) {
             const r = c.location.r;
-            if (!citiesByRow.has(r)) citiesByRow.set(r, []);
-            citiesByRow.get(r)!.push(c);
+            if (!this._citiesByRow.has(r)) this._citiesByRow.set(r, []);
+            this._citiesByRow.get(r)!.push(c);
         }
 
-        const rowEnqueue = (queue: SortedRenderObject[]) => (depth: number, _layer: any, draw: () => void) => {
-            queue.push({ y: depth, draw });
+        // Optimization: Re-use enqueue closure
+        const enqueue = (depth: number, layer: RenderLayer, draw: RenderFn) => {
+            // We ignore depth inside the bucket because within a single row, 
+            // the layer order (Terrain -> Infra -> Content -> Unit) determines occlusion.
+            this._rowBuckets[layer].push(draw);
         };
 
         // 2. Iterate Visible Rows
         for (let r = minRow; r < maxRow; r++) {
-            const rowObjectQueue: SortedRenderObject[] = [];
-            const enqueue = rowEnqueue(rowObjectQueue);
+            // Clear buckets for this row
+            for(let i=0; i<6; i++) {
+                this._rowBuckets[i].length = 0;
+            }
 
             // 2.1 Tiles in this row
             for (let c = minCol; c < maxCol; c++) {
@@ -189,8 +188,11 @@ export class MapRenderer {
                 const tile = this.map.getTile(q, r);
                 if (!tile) continue;
 
-                const tileScreen = hexToScreen(q, r, camera, this.hexSize);
-                
+                // Manual hexToScreen again for speed
+                const worldX = this.hexSize * Math.sqrt(3) * (q + r/2);
+                const worldY = (this.hexSize * 1.5 * r) * ISO_FACTOR;
+                const screenY = worldY * zoom - camera.y * zoom; // Used for depth, but irrelevant in bucket logic
+
                 // Add Infrastructure (Roads)
                 TileDrawer.enqueueInfrastructure(enqueue, ctx, {q, r}, tile, camera, this.hexSize, this.assets, this.map, selectedUnit, validMoves);
                 
@@ -199,7 +201,7 @@ export class MapRenderer {
                     enqueue, 
                     ctx, 
                     {q,r}, 
-                    tileScreen.y, 
+                    screenY, 
                     tile, 
                     camera, 
                     this.hexSize, 
@@ -213,21 +215,25 @@ export class MapRenderer {
             }
 
             // 2.2 Cities in this row
-            const rowCities = citiesByRow.get(r);
+            const rowCities = this._citiesByRow.get(r);
             if (rowCities) {
                 CityDrawer.enqueueCity(enqueue, ctx, rowCities, camera, this.hexSize, this.assets);
             }
 
             // 2.3 Units in this row
-            const rowUnits = unitsByRow.get(r);
+            const rowUnits = this._unitsByRow.get(r);
             if (rowUnits) {
                 UnitDrawer.enqueueUnits(enqueue, ctx, rowUnits, selectedUnit, camera, this.hexSize, this.assets);
             }
 
-            // 3. Sort & Draw this row immediately
-            rowObjectQueue.sort((a, b) => a.y - b.y);
-            for (const obj of rowObjectQueue) {
-                obj.draw();
+            // 3. Draw buckets in order (0 to 5)
+            // No sorting needed!
+            for(let i=0; i<6; i++) {
+                const bucket = this._rowBuckets[i];
+                const len = bucket.length;
+                for(let j=0; j<len; j++) {
+                    bucket[j]();
+                }
             }
         }
 
