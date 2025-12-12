@@ -1,0 +1,39 @@
+
+
+import { Hex } from '../Grid/HexMath';
+
+export interface Camera {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zoom: number;
+}
+
+export const ISO_FACTOR = Math.sqrt(3) / 4; 
+
+/**
+ * Converts Axial Coordinates (q, r) to Screen Pixels (x, y) with Isometric Projection.
+ */
+export const hexToScreen = (q: number, r: number, camera: Camera, hexSize: number) => {
+    const worldX = hexSize * Math.sqrt(3) * (q + r/2);
+    // Squash Y axis for isometric look
+    const worldY = (hexSize * 1.5 * r) * ISO_FACTOR;
+
+    const screenX = worldX * camera.zoom - camera.x * camera.zoom;
+    const screenY = worldY * camera.zoom - camera.y * camera.zoom;
+
+    return { x: screenX, y: screenY };
+};
+
+export const drawHexPath = (ctx: CanvasRenderingContext2D, x: number, y: number, size: number, scaleY: number = 1.0) => {
+    ctx.beginPath();
+    for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI / 180) * (60 * i + 30);
+        const px = x + size * Math.cos(angle);
+        const py = y + (size * Math.sin(angle) * scaleY);
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+};
